@@ -1,0 +1,332 @@
+---
+title: "Old Soul Probability"
+author: "Kendra Blalock"
+date: "12/05/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(readxl)
+library(imputeTS)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+```
+
+## The Question
+The other day I was chatting with an acquaintance and they commented that they believed I had an old soul. I don’t know them well enough to gauge if they were speaking metaphorically or literally. However, this wasn’t the first time I had been told that I had an old soul. I have always found the attribute a little ill-fitting. Regardless of my outward actions, my internal landscape is still curious enough that I don’t believe I have been around long enough to figure that much out. 
+
+It is an interesting concept to play around with. If someone has an old soul, how rare is that characteristic? It seems to me when individuals use the term, they imply there is something special about having an old soul and so it is not that common. I started to throw around some numbers in my head and decided it would be fun to play with them in a more accurate way. 
+
+
+## Assumptions
+Before we dive into the numbers, a few things must be stated. The information presented below is meant only as a fun mental experiment. I am making no statements about whether old souls, new souls, or any souls exist. I am drawing no conclusions about any specific religious or spiritual beliefs.  
+
+Instead of drawing from any specific viewpoint about reincarnation, I developed my own, simplified assumptions about souls that I could use. If reincarnation does occur, I am quite sure what I present would be a sad representation of the real thing.
+
+Assumptions: 
+1. Reincarnation does not occur across species; only souls previously embodied in a human can reincarnate back into a human. 
+2. Souls have an average reincarnation cycle of 100 years. Why? It is a nice round number. Since most humans die before 100, it gives souls a little extra time to hang out and rest. 
+3. New souls only appear when there are no more old souls to match the number of humans alive. 
+4. Once a new soul is born, it will continue to reincarnate every 100 years unless the population shrinks so that not all old souls are needed, at which time it exits the cycle. 
+5. The first group of souls start at 10,000 BC as new souls. Anything before that time period is too much for this exploration to handle. 
+6. The best souls enjoy ice cream; not relevant, but true.     
+    
+## Dataframe Setup
+I found estimated global population numbers starting at 10,000 BC. My first step was to create a dataframe with a row for every year from 10,000 BC to present. 
+
+```{r dataframe}
+
+#10,000BC to 2020AD == 12,020 years
+
+#Create an empty dataframe with 12,020 rows and 3 columns 
+os <- data.frame(matrix(NA, nrow = 12020, ncol = 3))
+
+#Add columns names
+colnames(os) <- c("RecordID", "Year", "Year2")
+
+#Add a row record ID
+os$RecordID <- seq.int(nrow(os)) 
+
+#Add in BC Years
+os[1:10000, 2] <- seq(from = 10000, to = 1)
+os[1:10000, 3] <- "BC"
+
+#Add in AD years
+os[10001:12020, 2] <- seq(from = 1, to = 2020)
+os[10001:12020, 3] <- "AD"
+
+#Create full date
+os$Year3 <- paste(os$Year,os$Year2,sep=" ")
+
+#View os dataframe
+head(os)
+
+
+```
+
+## Population Data 
+I found two complimentary data sources for this project. The first is Historical Estimates of World Population by the United States Census Bureau. <https://www.census.gov/data/tables/time-series/demo/international-programs/historical-est-worldpop.html>. Population estimates on this site cover 10,000 BC to 1950 AD. I selected the most conservative estimates listed in the “Summary Lower” column.          
+
+```{r historical}
+
+#Load data from 10,000BC to 1950 and match with os dataframe
+historical <- read_xlsx("US_Census_World_Pop.xlsx", 
+                        skip = 4)
+
+#View historical datafame
+head(historical)
+
+#Keep Year and SummaryLower
+historical <- historical[, 1:2]
+head(historical)
+
+#Create population variables in millions.
+historical$SumLowMil <- historical$SummaryLower*1000000
+
+#Remove 1950 line as it overlaps with the modern data estimates
+historical <- historical[-(39),]
+
+#Connect historical population to os
+os <- merge(os, 
+              historical, 
+              by.x = "Year3", 
+              by.y = "Year", 
+              all.x = T)
+
+#Remove historical dataframe
+rm(historical)
+
+```
+
+The second data source is population data found on the United Nations Department of Economic and Social Affairs Population Dynamics site, <https://population.un.org/wpp/Download/Standard/Population/>. I downloaded the "Total Population - Both Sexes (XLSX, 2.4 MB)" file. This data source covers 1950 AD - 2020 AD. 
+
+```{r modern}
+
+#Load modern data 1950 to 2020
+modern <- read_xlsx("WPP2019_POP_F01_1_TOTAL_POPULATION_BOTH_SEXES.xlsx", 
+                        skip = 16)
+
+#Drop all rows except row 1 (world population estimates) and drop columns 1:7. 
+modern <- modern[1, -(1:7)]
+
+#Transpose data
+modern <- as.data.frame(t(as.matrix(modern)))
+
+#Move rownames to new column
+modern$YearShort <- rownames(modern)
+rownames(modern) <- NULL
+
+#Rename population column  
+names(modern)[1] <- "ModPop"
+
+#Add AD to end of year
+modern$Year <- paste(modern$YearShort, "AD" ,sep=" ")
+
+head(modern)
+
+#Change ModPop into a number
+modern$ModPop <- as.numeric(modern$ModPop)
+
+#Create a population variable in millions (currently in thousands)
+modern$ModPopmil <- modern$ModPop*1000
+
+#Connect modern population to os
+os <- merge(os, 
+            modern, 
+            by.x = "Year3", 
+            by.y = "Year", 
+            all.x = T)
+
+#Remove modern dataframe
+rm(modern)
+
+```
+
+With both sets of data in my dataframe, the next step was to combine all population estimates into one column.
+
+```{r compile}
+
+#Combine population variables
+os$Population <- ifelse(!is.na(os$SumLowMil), os$SumLowMil, os$ModPopmil)
+
+#Drop unneeded columns 
+os <- os[, c(1, 2, 10)]
+
+#Re-sort records by RecordID
+os <- os[order(os$RecordID),]
+
+
+```
+
+## Imputing missing population data
+
+Population estimates prior to 1950 understandably have many gaps on a yearly timeline. I used the time series imputation package “imputeTS” to complete the estimated population numbers.   
+
+```{r impute}
+
+#Setup datafame for time series imputation
+os_ts <- ts(os, frequency = 1)
+
+#Impute values using interpolation imputation options
+os_ts2 <- na_interpolation(os_ts)
+
+#Turn time series back into dataframe and relink with os dataframe with year column
+os2 <- as.data.frame(os_ts2)
+
+#Drop updated Year variable
+os2 <- os2[,c(2:3)]
+
+#Merge with os
+os <- merge(os, 
+            os2, 
+            by.x = "RecordID", 
+            by.y = "RecordID", 
+            all.x = T)
+
+#Remane os dataframe
+names(os) <- c("RecordID", "Year", "PopEstimate", "PopImpute")
+
+#Remove unneeded items
+rm(os2, os_ts, os_ts2)
+
+
+```
+
+## Global Population Estimates from 10,000 BC to 2020 AD    
+
+```{r plot1}
+
+#Plot global population over last 12 thousand years
+ggplot(os, aes(RecordID, (PopImpute/1000000))) +
+  geom_line() +
+  labs(y= "Millions", 
+       x = NULL, 
+       title = "Estimated Global Population") +
+  scale_x_continuous(labels = c("10,000 BC", "7,500 BC", "5,000 BC", 
+                                "2,500 BC", "1 BC", "2020 AD")) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(color= "grey 20"),
+        plot.margin = unit(c(1,1,1,1), "cm"))
+
+
+```
+
+## Sets of Reincarnated Souls
+
+By using the very simple assumption that souls reincarnate exactly every 100 years, one could imagine how the souls alive in 1900 would first come from the souls that were alive in 1800 which would come from first from the souls alive in 1700 and so forth, all the way back to our arbitrary starting point at 10,000 BC. Again, the souls in 1901 would come from first from the souls in 1801 and so on. 
+
+By creating set assignments that group years exactly 100 years apart, I can create a variable which estimates the proportion of old souls for a particular year based on how many souls existed in the year of interest as compared to the number of souls which existed 100 years previously.
+
+
+```{r sets}
+
+#Add new grouping set variable
+os <- os %>% 
+  mutate(Set = as.numeric(str_sub(RecordID, -2))) 
+
+os <- os %>%
+  group_by(Set) %>%
+  mutate(Diff = PopImpute - lag(PopImpute)) %>% 
+  ungroup()
+
+os$Diff[is.na(os$Diff) | os$Diff < 0 ] <- 0
+
+os$Prop <- (os$PopImpute - os$Diff)/os$PopImpute
+
+head(os)
+
+```
+
+## Having a Soul that Previously Lived
+
+```{r plot2}
+
+#Plot looking at the proportion of old souls
+ggplot(os, aes(RecordID, Prop)) +
+  geom_line() +
+  labs(title = "Percentage of Individuals Born with a Previously-Lived Soul",
+       x = NULL,
+       y = NULL)+
+  scale_x_continuous(labels = c("10,000 BC", "7,500 BC", "5,000 BC", 
+                                "2,500 BC", "1 BC", "2020 AD")) +
+  scale_y_continuous(labels = scales::percent)+
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(color= "grey 20"),
+        plot.margin = unit(c(1,1,1,1), "cm"))
+
+
+```
+
+## The Chance That I Have an Old Soul
+Global population levels were relatively stable for a while throughout the last 12 thousand years. Only recently have we seen a significant rise in population, and thus the need for larger number of new souls to come into existence. You can see as you approach 2020 in the above plot, the chance of having an old soul plummets. 
+
+This brings me full circle to the original question that prompted this exploration: How likely is it that I could have an old soul? Looking at the above plot, it seems the probabilities are not favorable. However, I decided to look specifically at the years in the same set as my birthyear to get a more precise idea of the probability of having a brand new soul, as well as the probability of having a soul that lived various numbers of previous lives.     
+
+
+```{r myyear}
+
+#Identify the set number for my birthyear 1984
+os$Set[os$Year == "1984 AD"]
+
+my <- subset(os, Set == 84)
+
+#Add number of lives
+my$Lives <- seq.int(from = 119, to=0) 
+
+##Calculate the probability that my soul would have had the number of lives in the row
+my$Prop2 <- round((my$Diff)/(my$PopImpute[my$Year == "1984 AD"]),6)
+
+#View data
+head(my)
+
+```
+
+This dataframe now has two new columns listing the number of lives and the probability that I would have a soul with that number of lives. From here I can group the number of lives and then sum the probabilities.  
+
+```{r plot3}
+
+my %>% mutate(
+  LivesGroup = case_when(
+    Lives == 0 ~ "0",
+    Lives == 1 ~ "1", 
+    Lives >= 2 & Lives <= 20 ~ "2-20",
+    Lives >= 21 & Lives <= 40 ~ "21-40",
+    Lives >= 41 & Lives <= 60 ~ "41-60",
+    Lives >= 61 & Lives <= 80 ~ "61-80",
+    Lives >= 81 & Lives <= 100 ~ "81-100",
+    Lives >= 101 & Lives <= 120 ~ "101-120"
+  )
+) %>% 
+  group_by(LivesGroup) %>% 
+  summarise(TotalProp2 = sum(Prop2)) %>% 
+  ungroup() %>% 
+  mutate(LivesGroup = factor(LivesGroup, levels = 
+                               c("0", "1", "2-20", "21-40", "41-60", "61-80", "81-100", "101-120"))) %>% 
+  ggplot(aes(x=LivesGroup, y=TotalProp2))+
+  geom_col() +
+  labs(title = "Chance of Having a Soul with Previous Lives \n If Born in 1984",
+       y= NULL,
+       x= "Number of Previous Lives") +
+  scale_y_continuous(labels = scales::percent)+
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(color= "grey 20"))
+
+
+
+```
+
+I love this plot as it provides such an interesting and ridiculous look at a topic that hard science can’t address. Following my assumptions, I can see that the highest probability is that I have a soul with no previous lives, only followed by having a soul with one previous life (which would have been around 1884). However, to gain some of the characteristics often associated with having an old soul (wise, empathic, spiritual, intuitive, and so forth), I imagine I need to at least have lived 2 or more previous lives. 
+
+If I had a soul from the 2-20 lives category, that would mean that my first life would fall somewhere between 17 BC and 1784 AD. Surely, I would have seen and experienced a lot through these past lives as societies have grown significantly during that time. However, looking over the plot, it does make me wonder how old does a previously-lived soul needs to be to be considered an “old soul”. Technological advances have been so swift over the past two thousand years that maybe souls didn’t have the opportunity to really develop deep wisdom. It could be that I would need to have a soul that came from one of the further right categories. Using my assumptions it appears that while it is not likely that I have an old soul, however we define it, it isn’t such a low probability that it is completely out of the question.       
+
+## Final Thoughts
+
+As entertaining as this exploration was for me, it did leave me with a new consideration. With the recent and significant population increase, there may suddenly be a much higher proportion of brand-new souls in the population. Previously I had absorbed that being an old soul was somehow preferable as you gather wisdom from previous lives; who wouldn’t want that? I imagined that individuals with new souls would somehow end up committing more errors as they still needed to learn what works. Would generations with high rates of new souls be detrimental to humanity as they would be predisposed to repeat all of the past failures that we have already been through?
+
+However, there is another way to look at this. If souls can gain wisdom living life after life, one must assume that souls could also fall into ruts of bad approaches and false beliefs that are reinforced each life. Maybe it is the influx of new souls which will improve some of the long-standing issues humans have had. Maybe new souls are better able to address the racist, classist, and sexist paradigms that form the structure of our societal institutions because new souls haven’t spent lifetimes accumulating the understanding that this is “just the way it is”. I think this is a rather hopeful thought to end on.    
+
+![](OldSoulProb3.png)
